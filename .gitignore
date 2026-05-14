@@ -1,0 +1,7 @@
+# Local design / research material — not part of the published userscript.
+docs/
+
+# OS / editor noise
+.DS_Store
+.vscode/
+*.log
