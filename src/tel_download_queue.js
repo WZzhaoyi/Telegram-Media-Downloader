@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              Telegram Media Downloader
 // @namespace         https://github.com/WZzhaoyi
-// @version           2.1.0
+// @version           2.1.1
 // @description       Queue serial downloads from Telegram Web and bundle them into a single ZIP archive.
 // @description:zh-CN 下载 Telegram Web 媒体，全部完成后自动打包成一个 ZIP 文件
 // @author            wzzhaoyi <wzzhaoyi@outlook.com>
@@ -78,48 +78,70 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Parse Telegram's display dates ("Mar 11, 00:35 AM" on Web A,
-  // "May 3 at 02:26 AM" on Web K) into a sortable "MM-DDTHH-mm" string —
-  // ISO 8601-style (T is just the date/time separator, NOT a UTC marker).
-  // Telegram renders times in the browser's local timezone, so the result
-  // is local time with no zone suffix.
-  // Year is intentionally omitted — the display strings don't carry it.
-  // Returns "" on failure (non-English locale, format change, etc.) so the
-  // caller can fall back gracefully.
+  // Parse Telegram's local display date into a sortable filename prefix.
+  // Missing years are interpreted in the browser's current local year.
+  // Returns "" on failure so the caller can fall back gracefully.
   const MONTH_MAP = {
     jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
     jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
   };
-  const formatMessageDate = (raw) => {
+  const formatMessageDate = (raw, now = new Date()) => {
     if (!raw) return "";
-    const s = raw.toLowerCase().replace(/ /g, " ");
-    let month = null;
-    for (const name in MONTH_MAP) {
-      if (s.includes(name)) {
-        month = MONTH_MAP[name];
-        break;
-      }
-    }
-    if (!month) return "";
-    const dayMatch = s.match(/[a-z]+\s+(\d{1,2})/);
-    if (!dayMatch) return "";
-    const day = parseInt(dayMatch[1], 10);
-    const timeMatch = s.match(/(\d{1,2}):(\d{2})\s*(am|pm)?/);
+    const s = raw
+      .toLowerCase()
+      .replace(/ /g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const timeMatch = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?/);
     if (!timeMatch) return "";
     let hour = parseInt(timeMatch[1], 10);
     const minute = parseInt(timeMatch[2], 10);
-    const meridiem = timeMatch[3];
+    const second =
+      typeof timeMatch[3] === "string" ? parseInt(timeMatch[3], 10) : null;
+    const meridiem = timeMatch[4];
     if (meridiem === "pm" && hour < 12) hour += 12;
     else if (meridiem === "am" && hour === 12) hour = 0;
+
+    let year = now.getFullYear();
+    let month = null;
+    let day = null;
+
+    const relativeDate = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    if (/\btoday\b/.test(s)) {
+      month = relativeDate.getMonth() + 1;
+      day = relativeDate.getDate();
+    } else if (/\byesterday\b/.test(s)) {
+      relativeDate.setDate(relativeDate.getDate() - 1);
+      year = relativeDate.getFullYear();
+      month = relativeDate.getMonth() + 1;
+      day = relativeDate.getDate();
+    } else {
+      const dateMatch = s.match(
+        /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:,\s*(\d{4}))?/
+      );
+      if (!dateMatch) return "";
+      month = MONTH_MAP[dateMatch[1].slice(0, 3)];
+      day = parseInt(dateMatch[2], 10);
+      if (dateMatch[3]) year = parseInt(dateMatch[3], 10);
+    }
+
     if (
+      year < 1970 || year > 9999 ||
+      month < 1 || month > 12 ||
       day < 1 || day > 31 ||
       hour < 0 || hour > 23 ||
-      minute < 0 || minute > 59
+      minute < 0 || minute > 59 ||
+      (second !== null && (second < 0 || second > 59))
     ) {
       return "";
     }
     const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(month)}-${pad(day)}T${pad(hour)}-${pad(minute)}`;
+    const base = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}-${pad(minute)}`;
+    return second === null ? base : `${base}-${pad(second)}`;
   };
 
   // Strip control / path-illegal chars so the value is safe as a ZIP path
